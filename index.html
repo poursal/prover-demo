@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Prover demo</title>
+        <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-T3c6CoIi6uLrA9TneNEoa7RxnatzjcDSCmG1MXxSR1GAsXEV/Dwwykc2MPK8M2HN" crossorigin="anonymous">
+    </head>
+    <body>
+        <p></p>
+        <h1 class="text-center">Prover demo</h1>
+
+        <div class="container text-center">
+            <div class="row">
+                <div class="col">
+                    <form>
+                        <label for="range" class="form-label">Difficulty: <span id="difficulty">7</span></label>
+                        <input type="range" class="form-range" min="7" max="20" id="range" value="7" onchange="updateDifficulty();">
+                        <button id="startBtn" type="button" onclick="startExecution();" class="btn btn-primary">Start execution</button>
+                        <button id="stopBtn" type="button" onclick="stopExecution();" class="btn btn-secondary" disabled>Stop execution</button>
+                    </form>
+                </div>
+                <div class="col">
+                </div>
+                <div class="col">
+                    <div class="alert alert-success" role="alert" style="margin-bottom: 0; margin-top: 1rem;" id="error">
+                        Processing timeouts: <span id="errorNum">0</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="row">
+                <div class="col-4">
+                    <h3 style="margin-top: 1rem;">Requests per second</h3>
+                    <div id="requestsPerSecondGauge" style="width: 100%; height:400px;"></div>
+                </div>
+                <div class="col-8">
+                    <h3 style="margin-top: 1rem;">Average processing time (every 5 seconds)</h3>
+                    <div id="requestTimeGraph" style="width: 100%; height:400px;"></div>
+                </div>
+            </div>
+        </div>
+
+        <script src="js/lib/Prover.js"></script>
+        <script src="js/lib/IncrementalNonce.js"></script>
+        <script src="js/lib/RandomNonce.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js" integrity="sha384-C6RzsynM9kWDrMNeT87bh95OGNyZPhcTNXj1NW7RuBCsyN/o0jlpcV8Qyq46cDfL" crossorigin="anonymous"></script>
+        <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+        <script src="js/gauge.js"></script>
+        <script src="js/requestTime.js"></script>
+        <script>
+            let secondsElapsed = 0;
+            let requestsPerSecond = 0;
+            let requestsPerFiveSecond = 0;
+            let numberOfErrors = 0;
+            let requestTimeInMillisData = [];
+            let requestTimeInMillisSeries = [];
+            let executing = true;
+            let backgroundInterval;
+
+            updateDifficulty();
+
+            // The backend server will provide a signed JWT with the following info:
+            // {
+            //   data: [ 44, 86 .. ],
+            //   difficulty: 8,
+            //   exp: 1701710398
+            // }
+            //
+            // Now the client will need to provide the nonce along with the JWT in order
+            // for the API call to be executed successfully.
+
+            function updateStats() {
+                const now = new Date();
+                const time =
+                    String(now.getHours()).padStart(2, '0') + ":" +
+                    String(now.getMinutes()).padStart(2, '0') + ":" +
+                    String(now.getSeconds()).padStart(2, '0');
+
+                secondsElapsed++;
+                requestsPerFiveSecond += requestsPerSecond;
+
+                if (secondsElapsed > 0 && secondsElapsed % 5 === 0) {
+                    requestTimeInMillisData.push(time);
+                    requestTimeInMillisSeries.push(requestsPerFiveSecond !==0 ? 5000/requestsPerFiveSecond : '-');
+                    updateRequestTimeGraph(requestTimeInMillisData, requestTimeInMillisSeries);
+
+                    requestsPerFiveSecond = 0;
+                }
+
+                updateRequestsPerSecondGauge(requestsPerSecond);
+
+                requestsPerSecond = 0;
+            }
+
+            function reset() {
+                secondsElapsed = 0;
+                requestsPerSecond = 0;
+                requestsPerFiveSecond = 0;
+                numberOfErrors = 0;
+                requestTimeInMillisData = [];
+                requestTimeInMillisSeries = [];
+
+                const errorAlert = document.getElementById("error");
+                document.getElementById("errorNum").innerText = numberOfErrors;
+                errorAlert.classList.remove("alert-danger");
+                errorAlert.classList.add("alert-success");
+
+                updateRequestsPerSecondGauge(requestsPerSecond);
+                updateRequestTimeGraph(requestTimeInMillisData, requestTimeInMillisSeries);
+            }
+
+            function startProcessing() {
+                if (!executing) {
+                    return;
+                }
+
+                // This is the input from the backend server
+                const difficulty = parseInt(document.getElementById("range").value);
+                const data = new Uint8Array(32);
+                window.crypto.getRandomValues(data);
+                // Let's calculate the nonce
+                const nonce = new oratush.rnonce();
+                const prover = new oratush.prover();
+
+                prover.process(difficulty, data, nonce).then((value) => {
+                    if (value === null) {
+                        const errorAlert = document.getElementById("error");
+                        numberOfErrors++;
+                        document.getElementById("errorNum").innerText = numberOfErrors;
+                        errorAlert.classList.remove("alert-success");
+                        errorAlert.classList.add("alert-danger");
+                    }
+                    else {
+                        requestsPerSecond++;
+                    }
+
+                    startProcessing();
+                });
+            }
+
+            function startExecution() {
+                executing = true;
+                document.getElementById('startBtn').setAttribute('disabled', '');
+                document.getElementById('stopBtn').removeAttribute('disabled');
+
+                backgroundInterval = setInterval(updateStats, 1000);
+                reset();
+                startProcessing();
+            }
+
+            function stopExecution() {
+                clearInterval(backgroundInterval);
+                executing = false;
+                document.getElementById('stopBtn').setAttribute('disabled', '');
+                document.getElementById('startBtn').removeAttribute('disabled');
+            }
+
+            function updateDifficulty() {
+                document.getElementById("difficulty").innerText = document.getElementById("range").value;
+            }
+        </script>
+    </body>
+</html>
